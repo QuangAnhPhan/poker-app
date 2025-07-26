@@ -49,3 +49,16 @@ def root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+    try:
+        conn = get_connection()
+        conn.close()
+        return {
+            "message": "Poker Game API is running!",
+            "status": "PostgreSQL connected successfully!"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
