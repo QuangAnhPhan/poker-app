@@ -36,7 +36,13 @@ async def start_game(request: StartGameRequest):
         active_games[game_id] = game
         
         # Get valid actions for current player
-        valid_actions = game.get_valid_actions(game.pokerkit_state.current_player)
+        current_actor = getattr(game.pokerkit_state, 'actor_index', None)
+        if current_actor is not None:
+            # Convert from 0-based to 1-based player ID
+            current_player_id = current_actor + 1
+            valid_actions = game.get_valid_actions(current_player_id)
+        else:
+            valid_actions = []
         
         # Return game state
         game_state = game.get_game_state()
@@ -64,11 +70,21 @@ async def get_game_state(game_id: str):
         if game.state.is_finished:
             valid_actions = []
         else:
-            valid_actions = game.get_valid_actions(game.pokerkit_state.current_player)
+            current_actor = getattr(game.pokerkit_state, 'actor_index', None)
+            if current_actor is not None:
+                # Convert from 0-based to 1-based player ID
+                current_player_id = current_actor + 1
+                valid_actions = game.get_valid_actions(current_player_id)
+            else:
+                valid_actions = []
         
         # Get game state
         game_state = game.get_game_state()
         game_state["valid_actions"] = valid_actions
+        
+        # Temporary debug: Check if backend detects finished state
+        if not game_state.get('valid_actions') and game_state.get('stage') == 'finished':
+            print(f"DEBUG: Game appears finished but is_finished={game_state.get('is_finished')}")
         
         return GameStateResponse(**game_state)
         
@@ -76,10 +92,7 @@ async def get_game_state(game_id: str):
         raise
     except Exception as e:
         import traceback
-        print('ERROR in /api/poker/start:', e)
-        traceback.print_exc()
-        print(f"Unexpected error in get_game_state: {e}")
-        import traceback
+        print(f'ERROR in /api/poker/game/{game_id}:', e)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -142,22 +155,36 @@ async def execute_action(game_id: str, request: PlayerActionRequest):
         if not success:
             raise HTTPException(status_code=400, detail="Failed to execute action")
         
-        # If game is finished, save to database
+        # Check if game is finished and save to database
+        print(f"Checking if game is finished: game.state.is_finished = {game.state.is_finished}")
+        
         if game.state.is_finished:
+            print(f"GAME IS FINISHED! Attempting to save hand history for game {game_id}")
             try:
                 repo = PokerRepository()
-                repo.save_hand_history(game)
-                print(f"Hand history saved for game {game_id}")
-            except Exception as db_error:
-                print(f"Warning: Failed to save hand history: {db_error}")
+                hand_history = repo.save_hand_history(game)
+                print(f"✅ HAND HISTORY SAVED: {hand_history.id} - Winner: {game.state.winner_id}, Pot: {game.state.pot}")
+                print(f"   Players data saved with positions: {[f'P{p['id']}({"D" if p['is_dealer'] else "SB" if p['is_small_blind'] else "BB" if p['is_big_blind'] else ""})' for p in hand_history.players_data]}")
+            except Exception as e:
+                print(f"❌ ERROR saving hand history: {e}")
+                import traceback
+                traceback.print_exc()
             # DON'T remove from active games immediately - frontend needs to display final state
             # Game will be cleaned up when user starts a new game or explicitly resets
             print(f"Game {game_id} finished but kept in active_games for final state display")
+        else:
+            print(f"Game {game_id} is NOT finished yet, continuing...")
         
         # Get valid actions for next player
         try:
             if not game.state.is_finished:
-                valid_actions = game.get_valid_actions(game.pokerkit_state.current_player)
+                current_actor = getattr(game.pokerkit_state, 'actor_index', None)
+                if current_actor is not None:
+                    # Convert from 0-based to 1-based player ID
+                    current_player_id = current_actor + 1
+                    valid_actions = game.get_valid_actions(current_player_id)
+                else:
+                    valid_actions = []
             else:
                 valid_actions = []
         except Exception as next_actions_error:

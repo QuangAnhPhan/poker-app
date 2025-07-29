@@ -138,6 +138,9 @@ class PokerGame:
             # Initialize fallback card system
             self._initialize_unique_cards()
             
+            # Store initial player positions when bets are available
+            self._store_initial_positions()
+            
         except Exception as e:
             print(f"Error creating PokerKit state: {e}")
             import traceback
@@ -195,6 +198,37 @@ class PokerGame:
             print(f"Error initializing unique cards: {e}")
             self.unique_hole_cards = []
     
+    def _store_initial_positions(self):
+        """Store player positions when game starts and bet data is available"""
+        self.player_positions = {
+            'dealer': None,
+            'small_blind': None,
+            'big_blind': None
+        }
+        
+        try:
+            if self.pokerkit_state and hasattr(self.pokerkit_state, 'bets') and self.pokerkit_state.bets:
+                # Find positions based on initial bet amounts
+                for i, bet in enumerate(self.pokerkit_state.bets):
+                    bet_amount = int(bet)
+                    player_id = i + 1
+                    
+                    if bet_amount == 20:  # Small blind
+                        self.player_positions['small_blind'] = player_id
+                    elif bet_amount == 40:  # Big blind
+                        self.player_positions['big_blind'] = player_id
+                
+                # Calculate dealer position (1 position before small blind)
+                if self.player_positions['small_blind'] is not None:
+                    sb_index = self.player_positions['small_blind'] - 1  # Convert to 0-based
+                    dealer_index = (sb_index - 1) % 6  # 1 position before SB
+                    self.player_positions['dealer'] = dealer_index + 1  # Convert back to 1-based
+                
+        except Exception as e:
+            print(f"Error storing initial positions: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def _create_api_state(self) -> GameState:
         """Create API-compatible state from PokerKit state"""
         players = []
@@ -246,41 +280,25 @@ class PokerGame:
             
 
             
-            # Determine player positions based on actual game state
+            # Determine player positions using stored positions (captured at game start)
             is_dealer = False
             is_small_blind = False
             is_big_blind = False
             
-            # Check actual bets to determine blind positions
-            if self.pokerkit_state and hasattr(self.pokerkit_state, 'bets') and self.pokerkit_state.bets:
-                try:
-                    current_bet = int(self.pokerkit_state.bets[i])
-                    # Small blind posts 20, big blind posts 40
-                    if current_bet == 20:
-                        is_small_blind = True
-                    elif current_bet == 40:
-                        is_big_blind = True
-                except:
-                    pass
+            # Use stored positions if available
+            if hasattr(self, 'player_positions') and self.player_positions:
+                if self.player_positions['dealer'] == player_id:
+                    is_dealer = True
+                elif self.player_positions['small_blind'] == player_id:
+                    is_small_blind = True
+                elif self.player_positions['big_blind'] == player_id:
+                    is_big_blind = True
             
-            # Determine dealer position (typically the player before small blind in rotation)
-            # For now, we'll use PokerKit's dealer position if available
-            if self.pokerkit_state and hasattr(self.pokerkit_state, 'dealer_position'):
-                try:
-                    dealer_index = self.pokerkit_state.dealer_position
-                    is_dealer = (i == dealer_index)
-                except:
-                    # Fallback: assume dealer is the player with no blind bet and highest position
-                    if not is_small_blind and not is_big_blind:
-                        # Simple heuristic: if no bet and it's a reasonable dealer position
-                        current_bet = 0
-                        if self.pokerkit_state and hasattr(self.pokerkit_state, 'bets'):
-                            try:
-                                current_bet = int(self.pokerkit_state.bets[i])
-                            except:
-                                pass
-                        if current_bet == 0 and i >= 4:  # Players 5 or 6 are likely dealer candidates
-                            is_dealer = True
+            # Fallback: If no stored positions available, try to detect from current state
+            # (This should rarely happen since positions are stored at game start)
+            if not (is_dealer or is_small_blind or is_big_blind):
+                if player_id == 1:  # Only log once
+                    print(f"Warning: No stored positions found, using fallback detection")
             
             # Get current stack from PokerKit or use initial value
             current_stack = self.player_stacks[player_id]
@@ -340,7 +358,7 @@ class PokerGame:
             hasattr(self.pokerkit_state, 'actor_index') and 
             self.pokerkit_state.actor_index is not None):
             try:
-                return self.pokerkit_state.actor_index + 1
+                current_player = self.pokerkit_state.actor_index + 1
             except Exception as e:
                 print(f"Error getting current player: {e}")
         
@@ -368,6 +386,13 @@ class PokerGame:
             except:
                 pass
         
+        # Determine dealer position dynamically
+        dealer_position = 0  # Default
+        for player in players:
+            if player.is_dealer:
+                dealer_position = player.id
+                break
+        
         return GameState(
             id=self.game_id,
             players=players,
@@ -375,7 +400,7 @@ class PokerGame:
             pot=pot,
             current_bet=current_bet,
             stage=stage,
-            dealer_position=6,  # Player 6 is dealer
+            dealer_position=dealer_position,
             current_player=current_player,
             actions=[],
             small_blind=20,
@@ -700,43 +725,31 @@ class PokerGame:
     
     def execute_action(self, player_id: int, action: ActionType, amount: int = 0) -> bool:
         """Execute a player action using PokerKit's action system"""
-        print(f"PokerGame.execute_action called: player_id={player_id}, action={action}, amount={amount}")
-        
         if not self.pokerkit_state:
-            print("No PokerKit state available")
             return False
         
         player_index = player_id - 1  # Convert to 0-based indexing
-        print(f"Player index: {player_index}")
         
         # Verify it's this player's turn
         try:
             current_actor = getattr(self.pokerkit_state, 'actor_index', None)
-            print(f"Current actor index: {current_actor}")
             
             if current_actor != player_index:
-                print(f"Not player {player_id}'s turn (current actor: {current_actor})")
                 return False
         except Exception as turn_error:
             print(f"Error checking player turn: {turn_error}")
             return False
         
         try:
-            print(f"Executing action: {action}")
-            
             # Execute action using PokerKit
             if action == ActionType.FOLD:
-                print("Processing FOLD action")
                 if self.pokerkit_state.can_fold():
                     self.pokerkit_state.fold()
                     self._log_action(player_id, "fold")
-                    print("FOLD action completed")
                 else:
-                    print("Cannot fold at this time")
                     return False
                     
             elif action == ActionType.CHECK:
-                print("Processing CHECK action")
                 if self.pokerkit_state.can_check_or_call():
                     current_bet = 0
                     player_bet = 0
@@ -744,78 +757,56 @@ class PokerGame:
                         current_bet = max(self.pokerkit_state.bets)
                         player_bet = self.pokerkit_state.bets[player_index]
                     
-                    print(f"Current bet: {current_bet}, Player bet: {player_bet}")
-                    
                     if current_bet == player_bet:
                         self.pokerkit_state.check_or_call()
                         self._log_action(player_id, "check")
-                        print("CHECK action completed")
                     else:
-                        print("Cannot check - must call or raise")
                         return False
                 else:
-                    print("Cannot check or call at this time")
                     return False
                     
             elif action == ActionType.CALL:
-                print("Processing CALL action")
                 if self.pokerkit_state.can_check_or_call():
                     call_amount = 0
                     if hasattr(self.pokerkit_state, 'checking_or_calling_amount'):
                         call_amount = self.pokerkit_state.checking_or_calling_amount
-                    print(f"Call amount: {call_amount}")
                     self.pokerkit_state.check_or_call()
                     self._log_action(player_id, "call", call_amount)
-                    print("CALL action completed")
                 else:
-                    print("Cannot check or call at this time")
                     return False
                     
             elif action in [ActionType.BET, ActionType.RAISE]:
-                print(f"Processing {action} action with amount: {amount}")
                 if hasattr(self.pokerkit_state, 'can_complete_bet_or_raise_to'):
                     if self.pokerkit_state.can_complete_bet_or_raise_to(amount):
                         self.pokerkit_state.complete_bet_or_raise_to(amount)
                         action_name = "bet" if action == ActionType.BET else "raise"
                         self._log_action(player_id, action_name, amount)
-                        print(f"{action} action completed")
                     else:
-                        print(f"Cannot {action} to amount {amount}")
                         return False
                 else:
-                    print("Betting/raising not available")
                     return False
                     
             elif action == ActionType.ALL_IN:
-                print("Processing ALL_IN action")
                 if hasattr(self.pokerkit_state, 'stacks'):
                     all_in_amount = self.pokerkit_state.stacks[player_index]
-                    print(f"All-in amount: {all_in_amount}")
                     if (all_in_amount > 0 and 
                         hasattr(self.pokerkit_state, 'can_complete_bet_or_raise_to') and
                         self.pokerkit_state.can_complete_bet_or_raise_to(all_in_amount)):
                         self.pokerkit_state.complete_bet_or_raise_to(all_in_amount)
                         self._log_action(player_id, "all_in", all_in_amount)
-                        print("ALL_IN action completed")
                     else:
-                        print(f"Cannot go all-in with amount {all_in_amount}")
                         return False
                 else:
-                    print("Stacks not available for all-in")
                     return False
             else:
-                print(f"Unknown action: {action}")
                 return False
             
-            print("Updating API state...")
             # Update our API state
             self.state = self._create_api_state()
             
-            print("Handling automatic progression...")
             # Check if we need to deal community cards or finish the hand
             self._handle_automatic_progression()
             
-            print("Action execution successful")
             return True
             
         except Exception as e:
@@ -868,7 +859,38 @@ class PokerGame:
                     self._log_stage_transition(new_stage)
             
             # Check if hand is complete
+            # Check multiple conditions for game completion
+            game_should_end = False
+            
+            # Condition 1: PokerKit status indicates completion
             if hasattr(self.pokerkit_state, 'status') and not self.pokerkit_state.status:
+                game_should_end = True
+            
+            # Condition 2: No more actions possible (all players folded except one)
+            active_players = 0
+            for i in range(6):
+                if hasattr(self.pokerkit_state, 'statuses') and self.pokerkit_state.statuses:
+                    try:
+                        if self.pokerkit_state.statuses[i] != 0:  # Player is still active
+                            active_players += 1
+                    except:
+                        pass
+            
+            if active_players <= 1:
+                game_should_end = True
+            
+            # Condition 3: River completed and no more betting rounds
+            board_count = len(self.pokerkit_state.board_cards) if hasattr(self.pokerkit_state, 'board_cards') and self.pokerkit_state.board_cards else 0
+            if board_count >= 5:  # River completed
+                # Check if no more actions are possible
+                can_act = False
+                if hasattr(self.pokerkit_state, 'actor_index') and self.pokerkit_state.actor_index is not None:
+                    can_act = True
+                
+                if not can_act:
+                    game_should_end = True
+            
+            if game_should_end:
                 self._determine_winner()
                 
         except Exception as e:
@@ -998,12 +1020,28 @@ class PokerGame:
             # Update game state
             self.state.winner_id = winner_id
             self.state.winner_reason = f"{self.player_names[winner_id]} wins the hand"
+            self.state.pot = pot_amount  # ✅ FIX: Store the actual pot amount in game state
             self.state.is_finished = True
             self.state.stage = GameStage.FINISHED
+            
+            print(f"GAME MARKED AS FINISHED: winner_id={winner_id}, pot_amount={pot_amount}")
+            print(f"Game state is_finished: {self.state.is_finished}")
+            print(f"Game state pot: {self.state.pot}")
             
             # Update player stacks in game state to match PokerKit + winner adjustment
             for i in range(6):
                 self.state.players[i].stack = self.player_stacks[i + 1]
+            
+            # Refresh the entire game state to ensure position data is current
+            self.state = self._create_api_state()
+            # Re-apply the winner and finish state (since _create_api_state might reset these)
+            self.state.winner_id = winner_id
+            self.state.winner_reason = f"{self.player_names[winner_id]} wins the hand"
+            self.state.pot = pot_amount
+            self.state.is_finished = True
+            self.state.stage = GameStage.FINISHED
+            
+
             
             self._log_hand_completion(winner_id, pot_amount)
             print(f"WINNER: {self.player_names[winner_id]} wins {pot_amount} chips")
@@ -1159,6 +1197,37 @@ class PokerGame:
     
 
     
+    def _log_action(self, player_id: int, action: str, amount: int = 0):
+        """Log player action for hand history tracking"""
+        # Create action record using existing PlayerAction dataclass
+        action_type = ActionType(action)  # Convert string to ActionType enum
+        action_record = PlayerAction(
+            player_id=player_id,
+            action=action_type,
+            amount=amount,
+            timestamp=datetime.now()
+        )
+        
+        # Add to game state actions
+        self.state.actions.append(action_record)
+        
+        # Also add to detailed log for play log display
+        player_name = self.player_names.get(player_id, f"Player {player_id}")
+        if amount > 0:
+            self.detailed_log.append({
+                'type': 'player_action',
+                'player_name': player_name,
+                'action': action,
+                'amount': amount
+            })
+        else:
+            self.detailed_log.append({
+                'type': 'player_action', 
+                'player_name': player_name,
+                'action': action,
+                'amount': 0
+            })
+    
     def _log_hand_completion(self, winner_id: int, pot_amount: int):
         """Log hand completion with winner and pot info"""
         self.detailed_log.append(f"Final pot was {pot_amount}")
@@ -1169,8 +1238,9 @@ class PokerGame:
         """Get the current game state as a dictionary"""
         from dataclasses import asdict
         
-        # Update our API state
-        self.state = self._create_api_state()
+        # Update our API state (but preserve finished state if already set)
+        if not self.state.is_finished:
+            self.state = self._create_api_state()
         
         # Serialize players with hole_cards as strings
         players_data = []
@@ -1207,7 +1277,18 @@ class PokerGame:
                     stage = log_entry.get('new_stage', 'unknown')
                     community_cards = log_entry.get('community_cards', [])
                     if community_cards:
-                        detailed_log_strings.append(f"Stage: {stage.title()} - Community cards: {', '.join(community_cards)}")
+                        if stage.lower() == 'flop':
+                            detailed_log_strings.append(f"Flop cards dealt: {''.join(community_cards)}")
+                        elif stage.lower() == 'turn':
+                            # For turn, show only the new card (4th card)
+                            if len(community_cards) >= 4:
+                                detailed_log_strings.append(f"Turn card dealt: {community_cards[3]}")
+                        elif stage.lower() == 'river':
+                            # For river, show only the new card (5th card)
+                            if len(community_cards) >= 5:
+                                detailed_log_strings.append(f"River card dealt: {community_cards[4]}")
+                        else:
+                            detailed_log_strings.append(f"Stage: {stage.title()} - Community cards: {', '.join(community_cards)}")
                     else:
                         detailed_log_strings.append(f"Stage: {stage.title()}")
                 elif log_entry.get('type') == 'hand_completion':
