@@ -393,6 +393,18 @@ class PokerGame:
                 dealer_position = player.id
                 break
         
+        # Preserve existing actions if state already exists
+        existing_actions = []
+        existing_winner_id = None
+        existing_winner_reason = ""
+        existing_created_at = datetime.now()
+        
+        if hasattr(self, 'state') and self.state:
+            existing_actions = getattr(self.state, 'actions', [])
+            existing_winner_id = getattr(self.state, 'winner_id', None)
+            existing_winner_reason = getattr(self.state, 'winner_reason', "")
+            existing_created_at = getattr(self.state, 'created_at', datetime.now())
+        
         return GameState(
             id=self.game_id,
             players=players,
@@ -402,13 +414,13 @@ class PokerGame:
             stage=stage,
             dealer_position=dealer_position,
             current_player=current_player,
-            actions=[],
+            actions=existing_actions,  # Preserve existing actions
             small_blind=20,
             big_blind=40,
             is_finished=is_finished,
-            winner_id=None,
-            winner_reason="",
-            created_at=datetime.now()
+            winner_id=existing_winner_id,  # Preserve winner info
+            winner_reason=existing_winner_reason,
+            created_at=existing_created_at  # Preserve creation time
         )
     
     def _pokerkit_card_to_api_card(self, pokerkit_card) -> Card:
@@ -1199,17 +1211,21 @@ class PokerGame:
     
     def _log_action(self, player_id: int, action: str, amount: int = 0):
         """Log player action for hand history tracking"""
-        # Create action record using existing PlayerAction dataclass
-        action_type = ActionType(action)  # Convert string to ActionType enum
-        action_record = PlayerAction(
-            player_id=player_id,
-            action=action_type,
-            amount=amount,
-            timestamp=datetime.now()
-        )
-        
-        # Add to game state actions
-        self.state.actions.append(action_record)
+        try:
+            # Create action record using existing PlayerAction dataclass
+            action_type = ActionType(action)  # Convert string to ActionType enum
+            action_record = PlayerAction(
+                player_id=player_id,
+                action=action_type,
+                amount=amount,
+                timestamp=datetime.now()
+            )
+            
+            # Add to game state actions
+            self.state.actions.append(action_record)
+            
+        except Exception as e:
+            print(f"ERROR in _log_action: {e}")
         
         # Also add to detailed log for play log display
         player_name = self.player_names.get(player_id, f"Player {player_id}")
@@ -1238,9 +1254,15 @@ class PokerGame:
         """Get the current game state as a dictionary"""
         from dataclasses import asdict
         
-        # Update our API state (but preserve finished state if already set)
+        # Update our API state (but preserve finished state and actions if already set)
         if not self.state.is_finished:
+            # Preserve existing actions before recreating state
+            existing_actions = self.state.actions if hasattr(self.state, 'actions') else []
+            
             self.state = self._create_api_state()
+            
+            # Restore preserved actions
+            self.state.actions = existing_actions
         
         # Serialize players with hole_cards as strings
         players_data = []

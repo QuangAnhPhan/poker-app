@@ -240,11 +240,6 @@ GET /api/poker/{game_id}/state
 
 ## Development Setup
 
-### Prerequisites
-- Docker and Docker Compose
-- Node.js 18+ (for local frontend development)
-- Python 3.9+ (for local backend development)
-
 ### Quick Start
 ```bash
 # Clone repository
@@ -264,8 +259,8 @@ docker compose up
 ```bash
 # Backend
 cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+poetry install
+poetry run uvicorn app.main:app --reload --port 8000
 
 # Frontend
 cd frontend
@@ -285,119 +280,3 @@ Stores completed poker hands with full game state:
 - `community_cards`: JSON with community cards
 - `actions_log`: JSON with all player actions
 - `created_at`: Hand completion timestamp
-
-## Error Handling
-
-### Backend Error Handling
-- **PokerKit Integration**: Graceful fallback for PokerKit errors
-- **Action Validation**: Clear error messages for invalid actions
-- **Database Errors**: Proper exception handling for DB operations
-
-### Frontend Error Handling
-- **API Errors**: User-friendly error messages
-- **Network Issues**: Retry logic and loading states
-- **Invalid Actions**: Disabled buttons for invalid moves
-
-## Testing Strategy
-
-### Backend Testing
-- **Unit Tests**: Test individual game logic components
-- **Integration Tests**: Test API endpoints with real database
-- **PokerKit Integration**: Verify proper integration with poker engine
-
-### Frontend Testing
-- **Component Tests**: Test individual React components
-- **Integration Tests**: Test user workflows
-- **API Integration**: Mock API responses for reliable testing
-
-## Performance Considerations
-
-### Backend Optimizations
-- **In-Memory Game Storage**: Active games stored in memory for fast access
-- **Database Connection Pooling**: Efficient database connections
-- **PokerKit Caching**: Reuse PokerKit instances when possible
-
-### Frontend Optimizations
-- **Polling Strategy**: 2-second intervals balance responsiveness and performance
-- **Component Memoization**: Prevent unnecessary re-renders
-- **Lazy Loading**: Load hand history on demand
-
-## Security Considerations
-
-### Current Implementation
-- **Input Validation**: All inputs validated on both frontend and backend
-- **Action Validation**: PokerKit prevents invalid game actions
-- **Type Safety**: TypeScript prevents type-related vulnerabilities
-
-### Production Considerations
-- **Authentication**: Add user authentication system
-- **Rate Limiting**: Prevent API abuse
-- **HTTPS**: Secure communication in production
-- **Database Security**: Proper connection security and query parameterization
-
-## Troubleshooting
-
-### Common Issues
-
-#### 1. PokerKit Card Format Issues
-**Problem**: Cards not displaying correctly
-**Solution**: Ensure card format uses "T" for Ten (not "10")
-```python
-# Correct format
-Card(suit=Suit.HEARTS, rank=Rank.TEN)  # Displays as "Th"
-```
-
-#### 2. Game State Synchronization
-**Problem**: Frontend not updating
-**Solution**: Check polling interval and API connectivity
-
-#### 3. Invalid Action Errors
-**Problem**: Actions rejected by backend
-**Solution**: Verify action validation logic matches PokerKit requirements
-
-### Debug Mode
-Enable detailed logging by setting environment variables:
-```bash
-POKER_DEBUG=true
-POKERKIT_VERBOSE=true
-```
-
-## Future Enhancements
-
-### Planned Features
-1. **Multi-table Support**: Support multiple concurrent games
-2. **Tournament Mode**: Implement tournament structure
-3. **Player Statistics**: Track player performance over time
-4. **Replay System**: Replay completed hands step-by-step
-5. **Mobile Optimization**: Improve mobile user experience
-6. **Real-time Multiplayer**: WebSocket-based real-time updates
-
-### Technical Improvements
-1. **Redis Integration**: Replace in-memory storage with Redis
-2. **WebSocket Support**: Real-time bidirectional communication
-3. **Microservices**: Split into smaller, focused services
-4. **Monitoring**: Add application monitoring and metrics
-5. **CI/CD Pipeline**: Automated testing and deployment
-
-## Contributing
-
-### Code Style
-- **Python**: Follow PEP 8 guidelines
-- **TypeScript**: Use ESLint and Prettier configurations
-- **Git**: Use conventional commit messages
-
-### Pull Request Process
-1. Fork the repository
-2. Create feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit pull request with clear description
-
-## License
-
-This project is developed as a coding exercise and is not intended for commercial use.
-
----
-
-*Last Updated: January 2025*
-*Version: 2.0 (PokerKit Integration)*
