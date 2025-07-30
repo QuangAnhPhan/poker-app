@@ -163,10 +163,9 @@ async def execute_action(game_id: str, request: PlayerActionRequest):
             try:
                 repo = PokerRepository()
                 hand_history = repo.save_hand_history(game)
-                print(f"✅ HAND HISTORY SAVED: {hand_history.id} - Winner: {game.state.winner_id}, Pot: {game.state.pot}")
-                print(f"   Players data saved with positions: {[f'P{p['id']}({"D" if p['is_dealer'] else "SB" if p['is_small_blind'] else "BB" if p['is_big_blind'] else ""})' for p in hand_history.players_data]}")
+                print(f"HAND HISTORY SAVED: {hand_history.id} - Winner: {game.state.winner_id}, Pot: {game.state.pot}")
             except Exception as e:
-                print(f"❌ ERROR saving hand history: {e}")
+                print(f"ERROR saving hand history: {e}")
                 import traceback
                 traceback.print_exc()
             # DON'T remove from active games immediately - frontend needs to display final state

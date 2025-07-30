@@ -981,35 +981,59 @@ class PokerGame:
         try:
             # Find active players (those who haven't folded and have cards)
             active_players = []
+            
+            print(f"DEBUG: PokerKit statuses: {getattr(self.pokerkit_state, 'statuses', 'Not available')}")
+            print(f"DEBUG: PokerKit hole_cards length: {len(getattr(self.pokerkit_state, 'hole_cards', []))}")
+            
             for i in range(6):
-                if (hasattr(self.pokerkit_state, 'hole_cards') and 
-                    self.pokerkit_state.hole_cards and 
-                    i < len(self.pokerkit_state.hole_cards) and
-                    self.pokerkit_state.hole_cards[i] and
-                    len(self.pokerkit_state.hole_cards[i]) == 2):
-                    
+                has_cards = (hasattr(self.pokerkit_state, 'hole_cards') and 
+                            self.pokerkit_state.hole_cards and 
+                            i < len(self.pokerkit_state.hole_cards) and
+                            self.pokerkit_state.hole_cards[i] and
+                            len(self.pokerkit_state.hole_cards[i]) == 2)
+                
+                if has_cards:
                     # Check if player is still active (not folded)
-                    is_active = True
-                    if hasattr(self.pokerkit_state, 'statuses'):
+                    # Default to FOLDED for safety - only mark active if we can confirm they're not folded
+                    is_active = False
+                    
+                    if hasattr(self.pokerkit_state, 'statuses') and self.pokerkit_state.statuses:
                         try:
-                            is_active = self.pokerkit_state.statuses[i] != 0
-                        except:
-                            pass
+                            if i < len(self.pokerkit_state.statuses):
+                                # In PokerKit, status != 0 means active (not folded)
+                                is_active = self.pokerkit_state.statuses[i] != 0
+                                print(f"DEBUG: Player {i+1} status: {self.pokerkit_state.statuses[i]}, active: {is_active}")
+                            else:
+                                print(f"DEBUG: Player {i+1} index out of range for statuses")
+                        except Exception as e:
+                            print(f"DEBUG: Error checking status for player {i+1}: {e}")
+                            is_active = False  # Default to folded on error
+                    else:
+                        print(f"DEBUG: No statuses available, checking our internal fold tracking")
+                        # Fallback: check our internal game state for fold status
+                        if i < len(self.state.players):
+                            is_active = not self.state.players[i].is_folded
+                            print(f"DEBUG: Player {i+1} internal fold status: {self.state.players[i].is_folded}, active: {is_active}")
                     
                     if is_active:
                         active_players.append(i)
+                        print(f"DEBUG: Added Player {i+1} to active players")
+                    else:
+                        print(f"DEBUG: Player {i+1} is folded, not adding to active players")
             
             if not active_players:
                 print("No active players found for winner determination")
                 return
+            
+            print(f"DEBUG: Active players: {[p+1 for p in active_players]}")
             
             # If only one active player, they win by default
             if len(active_players) == 1:
                 winner_index = active_players[0]
                 winner_id = winner_index + 1
             else:
-                # Multiple active players - evaluate hands using PokerKit
-                winner_index = self._evaluate_showdown(active_players)
+                # Multiple active players - use PokerKit's native winner determination
+                winner_index = self._evaluate_showdown_with_pokerkit(active_players)
                 winner_id = winner_index + 1
             
             # Calculate pot amount from all bets
@@ -1062,153 +1086,137 @@ class PokerGame:
             print(f"Error determining winner: {e}")
             import traceback
             traceback.print_exc()
-    
-    def _evaluate_showdown(self, active_player_indices: List[int]) -> int:
-        """Evaluate hands at showdown using simple card comparison"""
+            
+    def _evaluate_showdown_with_pokerkit(self, active_player_indices: List[int]) -> int:
+        """Use PokerKit to evaluate the showdown and determine the winner"""
         try:
-            # Since PokerKit's StandardHighHand is causing issues, let's use a simpler approach
-            # that leverages our existing card conversion logic
-            
-            best_hand_strength = -1
-            best_player_index = active_player_indices[0]
-            
-            # Get community cards as API cards for evaluation
-            community_cards = []
-            if hasattr(self.pokerkit_state, 'board_cards') and self.pokerkit_state.board_cards:
-                for card in self.pokerkit_state.board_cards:
-                    converted = self._pokerkit_card_to_api_card(card)
-                    if converted:
-                        community_cards.append(converted)
-            
-            # Evaluate each active player's hand
-            for player_index in active_player_indices:
-                if (hasattr(self.pokerkit_state, 'hole_cards') and 
-                    self.pokerkit_state.hole_cards and 
-                    player_index < len(self.pokerkit_state.hole_cards) and
-                    self.pokerkit_state.hole_cards[player_index]):
+            # Special case for preflop all-in (no community cards)
+            if hasattr(self.pokerkit_state, 'board_cards') and not self.pokerkit_state.board_cards:
+                # Use PokerKit's native functionality by dealing out the board
+                # Save the current state to restore later
+                import copy
+                original_state = copy.deepcopy(self.pokerkit_state)
+                
+                try:
+                    # Deal the flop, turn, and river
+                    self.pokerkit_state.deal_board()
+                    self.pokerkit_state.deal_board()
+                    self.pokerkit_state.deal_board()
                     
-                    # Convert hole cards to API cards
-                    hole_cards = []
-                    for card in self.pokerkit_state.hole_cards[player_index]:
-                        converted = self._pokerkit_card_to_api_card(card)
-                        if converted:
-                            hole_cards.append(converted)
+                    # Now use PokerKit's showdown evaluation
+                    if hasattr(self.pokerkit_state, 'showdown_winners') and self.pokerkit_state.showdown_winners:
+                        winners = self.pokerkit_state.showdown_winners
+                        
+                        # Find the first winner that's in our active players list
+                        for winner_index in winners:
+                            if winner_index in active_player_indices:
+                                # Restore original state before returning
+                                self.pokerkit_state = original_state
+                                return winner_index + 1  # Convert to 1-indexed
+                        
+                        # If no winner found in active players, return first winner
+                        if winners:
+                            # Restore original state before returning
+                            self.pokerkit_state = original_state
+                            return winners[0] + 1  # Convert to 1-indexed
                     
-                    if len(hole_cards) == 2 and len(community_cards) >= 3:
-                        # Calculate a simple hand strength score
-                        hand_strength = self._calculate_hand_strength(hole_cards, community_cards)
+                    # Check payoffs as fallback
+                    if hasattr(self.pokerkit_state, 'payoffs') and self.pokerkit_state.payoffs:
+                        payoffs = self.pokerkit_state.payoffs
                         
-                        if hand_strength > best_hand_strength:
-                            best_hand_strength = hand_strength
-                            best_player_index = player_index
-                    elif len(hole_cards) == 2 and len(community_cards) == 0:
-                        # Preflop all-in - use high card evaluation
-                        hand_strength = self._calculate_preflop_strength(hole_cards)
-                        
-                        if hand_strength > best_hand_strength:
-                            best_hand_strength = hand_strength
-                            best_player_index = player_index
+                        # Find player with positive payoff (winner)
+                        for i, payoff in enumerate(payoffs):
+                            if payoff > 0 and i in active_player_indices:
+                                # Restore original state before returning
+                                self.pokerkit_state = original_state
+                                return i + 1  # Convert to 1-indexed
+                    
+                    # Restore original state before falling back
+                    self.pokerkit_state = original_state
+                except Exception as e:
+                    # Restore original state if there's an error
+                    self.pokerkit_state = original_state
+                    # Continue to standard evaluation
             
-            return best_player_index
+            # Standard evaluation for non-preflop or if preflop evaluation failed
+            # Try to use PokerKit's showdown_winners if available
+            if hasattr(self.pokerkit_state, 'showdown_winners') and self.pokerkit_state.showdown_winners:
+                winners = self.pokerkit_state.showdown_winners
+                
+                # Find the first winner that's in our active players list
+                for winner_index in winners:
+                    if winner_index in active_player_indices:
+                        return winner_index + 1  # Convert to 1-indexed
+                
+                # If no winner found in active players, return first winner
+                if winners:
+                    return winners[0] + 1  # Convert to 1-indexed
+            
+            # Fallback: Check payoffs to determine winner
+            if hasattr(self.pokerkit_state, 'payoffs') and self.pokerkit_state.payoffs:
+                payoffs = self.pokerkit_state.payoffs
+                
+                # Find player with positive payoff (winner)
+                for i, payoff in enumerate(payoffs):
+                    if payoff > 0 and i in active_player_indices:
+                        return i + 1  # Convert to 1-indexed
+            
+            # If no winner found, return first active player as fallback
+            return active_player_indices[0] + 1  # Convert to 1-indexed
             
         except Exception as e:
-            print(f"Error in showdown evaluation: {e}")
-            # Fallback to first active player
-            return active_player_indices[0]
-    
-    def _calculate_hand_strength(self, hole_cards: List[Card], community_cards: List[Card]) -> int:
-        """Calculate a simple hand strength score for comparison"""
-        try:
-            # Combine all cards
-            all_cards = hole_cards + community_cards
-            
-            # Convert to rank values for easier processing
-            ranks = []
-            suits = []
-            
-            for card in all_cards:
-                # Convert rank to numeric value
-                rank_value = {
-                    Rank.TWO: 2, Rank.THREE: 3, Rank.FOUR: 4, Rank.FIVE: 5,
-                    Rank.SIX: 6, Rank.SEVEN: 7, Rank.EIGHT: 8, Rank.NINE: 9,
-                    Rank.TEN: 10, Rank.JACK: 11, Rank.QUEEN: 12, Rank.KING: 13, Rank.ACE: 14
-                }.get(card.rank, 0)
-                
-                ranks.append(rank_value)
-                suits.append(card.suit)
-            
-            # Count rank occurrences
-            rank_counts = {}
-            for rank in ranks:
-                rank_counts[rank] = rank_counts.get(rank, 0) + 1
-            
-            # Sort counts for pattern matching
-            counts = sorted(rank_counts.values(), reverse=True)
-            
-            # Simple hand strength calculation
-            if counts[0] == 4:  # Four of a kind
-                return 7000 + max(ranks)
-            elif counts[0] == 3 and counts[1] == 2:  # Full house
-                return 6000 + max(ranks)
-            elif len(set(suits)) <= 2:  # Possible flush (simplified)
-                return 5000 + max(ranks)
-            elif counts[0] == 3:  # Three of a kind
-                return 3000 + max(ranks)
-            elif counts[0] == 2 and counts[1] == 2:  # Two pair
-                return 2000 + max(ranks)
-            elif counts[0] == 2:  # One pair
-                return 1000 + max(ranks)
-            else:  # High card
-                return max(ranks)
-                
-        except Exception as e:
-            print(f"Error calculating hand strength: {e}")
-            return 0
-    
-    def _calculate_preflop_strength(self, hole_cards: List[Card]) -> int:
-        """Calculate preflop hand strength for all-in scenarios"""
-        try:
-            if len(hole_cards) != 2:
-                return 0
-            
-            # Convert to rank values
-            ranks = []
-            suits = []
-            
-            for card in hole_cards:
-                rank_value = {
-                    Rank.TWO: 2, Rank.THREE: 3, Rank.FOUR: 4, Rank.FIVE: 5,
-                    Rank.SIX: 6, Rank.SEVEN: 7, Rank.EIGHT: 8, Rank.NINE: 9,
-                    Rank.TEN: 10, Rank.JACK: 11, Rank.QUEEN: 12, Rank.KING: 13, Rank.ACE: 14
-                }.get(card.rank, 0)
-                
-                ranks.append(rank_value)
-                suits.append(card.suit)
-            
-            # Sort ranks high to low
-            ranks.sort(reverse=True)
-            high_card = ranks[0]
-            low_card = ranks[1]
-            
-            # Check for pair
-            if high_card == low_card:
-                return 1000 + high_card  # Pair bonus
-            
-            # Check for suited
-            suited_bonus = 50 if suits[0] == suits[1] else 0
-            
-            # Check for connected (straight potential)
-            connected_bonus = 25 if abs(high_card - low_card) == 1 else 0
-            
-            # Base strength is high card + low card + bonuses
-            return high_card * 15 + low_card + suited_bonus + connected_bonus
-            
-        except Exception as e:
-            print(f"Error calculating preflop strength: {e}")
-            return 0
-    
+            # Fall back to first active player
+            return active_player_indices[0] + 1  # Convert to 1-indexed
+        
 
+    # Custom preflop all-in evaluation removed - using PokerKit's native functionality
     
+    # PokerKit-only evaluation methods below
+
+    def _pokerkit_card_to_api_card(self, pokerkit_card):
+        """Convert a PokerKit card to our API card format"""
+        try:
+            card_str = str(pokerkit_card)
+            
+            # Extract rank and suit from the card string
+            if '(' in card_str and ')' in card_str:
+                # Format like "EIGHT OF HEARTS (8h)"
+                rank_suit = card_str.split('(')[1].split(')')[0]
+                rank_char = rank_suit[0].upper()
+                suit_char = rank_suit[1].lower()
+            elif '[' in card_str and ']' in card_str:
+                # Format like "[3s]"
+                rank_suit = card_str.strip('[]')
+                rank_char = rank_suit[0].upper()
+                suit_char = rank_suit[1].lower()
+            elif len(card_str) >= 2:
+                # Simple format like "8h"
+                rank_char = card_str[0].upper()
+                suit_char = card_str[1].lower()
+            else:
+                return None
+            
+            # Map rank character to our Rank enum
+            rank_map = {
+                '2': Rank.TWO, '3': Rank.THREE, '4': Rank.FOUR, '5': Rank.FIVE,
+                '6': Rank.SIX, '7': Rank.SEVEN, '8': Rank.EIGHT, '9': Rank.NINE,
+                'T': Rank.TEN, 'J': Rank.JACK, 'Q': Rank.QUEEN, 'K': Rank.KING, 'A': Rank.ACE
+            }
+            
+            # Map suit character to our Suit enum
+            suit_map = {
+                's': Suit.SPADES, 'h': Suit.HEARTS, 'd': Suit.DIAMONDS, 'c': Suit.CLUBS
+            }
+            
+            if rank_char not in rank_map or suit_char not in suit_map:
+                return None
+                
+            return Card(rank=rank_map[rank_char], suit=suit_map[suit_char])
+            
+        except Exception as e:
+            return None
+
+    # Manual hand evaluation methods removed - using PokerKit-only evaluation
     def _log_action(self, player_id: int, action: str, amount: int = 0):
         """Log player action for hand history tracking"""
         try:
